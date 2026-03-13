@@ -1,8 +1,8 @@
 from google.adk.agents.llm_agent import Agent
 
 root_agent = Agent(
-    model='gemini-1.5-pro-latest',
-    name='root_agent',
-    description='A helpful assistant for user questions.',
-    instruction='Answer user questions to the best of your knowledge',
+    model="gemini-2.5-flash-native-audio-preview-12-2025",
+    name="root_agent",
+    description="A helpful assistant for user questions.",
+    instruction="Answer user questions to the best of your knowledge",
 )

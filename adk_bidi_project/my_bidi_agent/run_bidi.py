@@ -1,10 +1,11 @@
 import asyncio
 import os
 from dotenv import load_dotenv
-from google.adk.runners import Runner
+from google.adk.runners import Runner, RunConfig
 from google.adk.agents.live_request_queue import LiveRequestQueue
 from google.adk.sessions.in_memory_session_service import InMemorySessionService
 from google.genai import types
+from google.genai.types import Modality
 from agent import root_agent
 
 

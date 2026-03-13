@@ -1,5 +1,0 @@
-{
-  "name": "Live Voice Agent",
-  "description": "A bidirectional streaming agent with voice input and skills using the Gemini Live API.",
-  "requestFramePermissions": ["microphone"]
-}

@@ -27,10 +27,12 @@ export default function App() {
   useEffect(() => {
     // Initialize AI client
     const apiKey = process.env.GEMINI_API_KEY;
+    
     if (apiKey) {
+      addLog('system', `API Key detected (starts with: ${apiKey.substring(0, 4)}...)`);
       aiRef.current = new GoogleGenAI({ apiKey });
     } else {
-      addLog('system', 'Error: GEMINI_API_KEY is missing. Please configure it in the AI Studio settings.');
+      addLog('system', 'Error: GEMINI_API_KEY is missing. Please check your configuration.');
     }
 
     audioRecorderRef.current = new AudioRecorder();
@@ -71,81 +73,85 @@ export default function App() {
     }
 
     setIsConnecting(true);
-    addLog('system', 'Requesting microphone access...');
+    addLog('system', 'Step 1: Requesting microphone access...');
 
     let stream: MediaStream | null = null;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: true, // More permissive
+        audio: true,
       });
       
       const track = stream.getAudioTracks()[0];
       if (track) {
-        addLog('system', `Using microphone: ${track.label}`);
+        addLog('system', `Step 2: Microphone OK - ${track.label}`);
       }
     } catch (err: any) {
       let errorMsg = `Microphone access denied: ${err.message}`;
       if (err.name === 'NotAllowedError' || err.message.includes('denied')) {
-        errorMsg += '. Please check your browser and system settings to allow microphone access for this site.';
+        errorMsg += '. Please check your browser settings.';
       }
       addLog('system', errorMsg);
       setIsConnecting(false);
       return;
     }
 
-    addLog('system', 'Connecting to Gemini Live API...');
+    const modelName = 'gemini-2.5-flash-native-audio-preview-09-2025';
+    const config = {
+      model: modelName,
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
+        },
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+        systemInstruction: 'You are a helpful voice assistant. Keep answers concise.',
+        tools: [
+          {
+            functionDeclarations: [
+              {
+                name: 'get_current_weather',
+                description: 'Get the current weather in a given location',
+                parameters: {
+                  type: Type.OBJECT,
+                  properties: {
+                    location: { type: Type.STRING, description: 'The city and state, e.g. San Francisco, CA' },
+                    unit: { type: Type.STRING, enum: ['celsius', 'fahrenheit'] },
+                  },
+                  required: ['location'],
+                },
+              },
+              {
+                name: 'change_light_color',
+                description: 'Change the color of the smart lights in a room',
+                parameters: {
+                  type: Type.OBJECT,
+                  properties: {
+                    room: { type: Type.STRING, description: 'The room to change the lights in' },
+                    color: { type: Type.STRING, description: 'The color to change the lights to' },
+                  },
+                  required: ['room', 'color'],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    addLog('system', `Step 3: Connecting with config: ${JSON.stringify({ model: modelName, modalities: config.config.responseModalities })}`);
 
     try {
       const sessionPromise = aiRef.current.live.connect({
-        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
-        config: {
-          responseModalities: [Modality.AUDIO],
-          speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
-          },
-          inputAudioTranscription: {}, // Enable user speech transcription
-          outputAudioTranscription: {}, // Enable model speech transcription
-          systemInstruction: 'You are a helpful voice assistant. You have access to skills like getting the weather and controlling smart lights. Keep your answers concise and conversational.',
-          tools: [
-            {
-              functionDeclarations: [
-                {
-                  name: 'get_current_weather',
-                  description: 'Get the current weather in a given location',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      location: { type: Type.STRING, description: 'The city and state, e.g. San Francisco, CA' },
-                      unit: { type: Type.STRING, enum: ['celsius', 'fahrenheit'] },
-                    },
-                    required: ['location'],
-                  },
-                },
-                {
-                  name: 'change_light_color',
-                  description: 'Change the color of the smart lights in a room',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      room: { type: Type.STRING, description: 'The room to change the lights in' },
-                      color: { type: Type.STRING, description: 'The color to change the lights to' },
-                    },
-                    required: ['room', 'color'],
-                  },
-                },
-              ],
-            },
-          ],
-        },
+        ...config,
         callbacks: {
           onopen: () => {
-            addLog('system', 'Connected! Start speaking...');
+            addLog('system', 'Step 4: Connection opened successfully.');
             setIsConnected(true);
             setIsConnecting(false);
             
             audioStreamerRef.current?.init();
             
-            // Start recording and sending audio
             audioRecorderRef.current?.start((base64Data) => {
               sessionPromise.then((session) => {
                 session.sendRealtimeInput({
@@ -153,15 +159,21 @@ export default function App() {
                 });
               });
             }, stream!, (v) => {
-              // Smooth the volume display a bit
               setVolume(prev => prev * 0.7 + v * 0.3);
             }).catch(err => {
-              addLog('system', `Audio processing error: ${err.message}`);
+              addLog('system', `Audio recording failed: ${err.message}`);
               disconnect();
             });
           },
           onmessage: async (message: LiveServerMessage) => {
             const msg = message as any;
+            console.log('Message from server:', msg);
+            
+            // If we get an error in a message
+            if (msg.serverContent?.modelTurn?.parts?.some((p: any) => p.text?.includes('error') || p.text?.includes('Error'))) {
+              addLog('system', `Potential model error in message: ${JSON.stringify(msg.serverContent)}`);
+            }
+
             // Handle user transcription
             if (msg.serverContent?.userTurn?.parts) {
               const userText = msg.serverContent.userTurn.parts
@@ -199,20 +211,19 @@ export default function App() {
 
             // Handle tool calls
             if (message.toolCall) {
+              addLog('system', `Tool call: ${message.toolCall.functionCalls.map(f => f.name).join(', ')}`);
               const responses = message.toolCall.functionCalls.map((call) => {
-                addLog('tool', `Executing skill: ${call.name}(${JSON.stringify(call.args)})`);
+                addLog('tool', `Skill: ${call.name}`);
                 
                 let result: any = { status: 'unknown_tool' };
                 
                 if (call.name === 'get_current_weather') {
                   const loc = (call.args as any).location || 'Unknown';
                   result = { weather: 'Sunny', temperature: '72', unit: 'fahrenheit', location: loc };
-                  addLog('tool', `Result: ${JSON.stringify(result)}`);
                 } else if (call.name === 'change_light_color') {
                   const room = (call.args as any).room || 'Unknown';
                   const color = (call.args as any).color || 'Unknown';
                   result = { status: 'success', room, color };
-                  addLog('tool', `Result: ${JSON.stringify(result)}`);
                 }
                 
                 return {
@@ -227,12 +238,21 @@ export default function App() {
               });
             }
           },
-          onclose: () => {
-            addLog('system', 'Connection closed.');
+          onclose: (event?: any) => {
+            const reason = event?.reason || 'No specific reason provided';
+            const code = event?.code || 'No code';
+            addLog('system', `Connection closed by server. Code: ${code}, Reason: ${reason}`);
             disconnect(false);
           },
-          onerror: (error) => {
-            addLog('system', `Error: ${error}`);
+          onerror: (error: any) => {
+            console.error('Gemini Live Detailed Error:', error);
+            let detailedError = 'Unknown error';
+            try {
+              detailedError = JSON.stringify(error, Object.getOwnPropertyNames(error));
+            } catch (e) {
+              detailedError = String(error);
+            }
+            addLog('system', `CRITICAL ERROR: ${detailedError}`);
             disconnect(false);
           },
         },
@@ -240,7 +260,7 @@ export default function App() {
 
       sessionRef.current = sessionPromise;
     } catch (err: any) {
-      addLog('system', `Failed to connect: ${err.message}`);
+      addLog('system', `Immediate connection failure: ${err.message}`);
       setIsConnecting(false);
     }
   };
